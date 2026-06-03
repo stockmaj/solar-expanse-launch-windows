@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Build SolarExpanseLaunchWindows.dll (Release). Requires the game installed locally.
+# Override game path with SOLAR_EXPANSE_GAME=<path>.
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "$script_dir/.." && pwd)"
+
+DEFAULT_GAME="$HOME/Applications/Sikarugir/Steam Wine.app/Contents/SharedSupport/prefix/drive_c/Program Files (x86)/Steam/steamapps/common/Solar Expanse"
+GAME="${SOLAR_EXPANSE_GAME:-$DEFAULT_GAME}"
+
+dotnet build "$repo_root/src/mod" -c Release --nologo --verbosity quiet \
+    -p:SolarExpanseInstall="$GAME"
