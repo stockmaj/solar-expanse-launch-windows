@@ -30,7 +30,7 @@ echo "Releasing $name $version..."
 
 "$script_dir/package"
 
-zip_path="dist/${name}_v${numeric_version}.zip"
+zip_path="$repo_root/dist/${name}_v${numeric_version}.zip"
 if [[ ! -f "$zip_path" ]]; then
   echo "error: release archive not found: $zip_path" >&2
   exit 1

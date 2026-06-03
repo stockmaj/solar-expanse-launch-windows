@@ -31,12 +31,12 @@ rm -rf "$staging_dir"
 mkdir -p "$staging_dir/BepInEx/plugins"
 cp "$dll_path" "$staging_dir/BepInEx/plugins/"
 
-zip_path="$dist_dir/${name}_v${version}.zip"
-mkdir -p "$dist_dir"
+zip_path="$repo_root/$dist_dir/${name}_v${version}.zip"
+mkdir -p "$repo_root/$dist_dir"
 rm -f "$zip_path"
 (
   cd "$staging_dir"
-  zip -qr "../../${name}_v${version}.zip" BepInEx
+  zip -qr "$zip_path" BepInEx
 )
 rm -rf "$staging_dir"
 
