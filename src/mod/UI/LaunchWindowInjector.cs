@@ -549,7 +549,7 @@ namespace SolarExpanseLaunchWindows.UI
     internal class LWMover : MonoBehaviour,
         IPointerEnterHandler, IPointerExitHandler,
         IPointerDownHandler, IPointerUpHandler,
-        IBeginDragHandler, IDragHandler
+        IBeginDragHandler, IDragHandler, IEndDragHandler
     {
         internal Image              Bg;
         internal Color              NormalColor;
@@ -561,10 +561,11 @@ namespace SolarExpanseLaunchWindows.UI
         private RectTransform _rt;
         private Canvas        _canvas;
         private RectTransform _canvasRT;
-        private Vector2       _clickPressPos;
+        private Vector2       _pressScreenPos;
         private Vector2       _dragStartPos;
-        private bool          _wasDrag;
-        private bool          _positioned;
+        private Vector2       _lastCanvasSize;
+        private Vector2       _normalizedPos;
+        private bool          _normalizedPosSet;
 
         void Awake()
         {
@@ -576,12 +577,20 @@ namespace SolarExpanseLaunchWindows.UI
         IEnumerator Start()
         {
             yield return null;
+            yield return null;
             PositionButton();
         }
 
         void Update()
         {
-            if (!_positioned) PositionButton();
+            if (_canvasRT == null) return;
+            Vector2 sz = _canvasRT.rect.size;
+            if (sz != _lastCanvasSize)
+            {
+                _lastCanvasSize = sz;
+                RestoreFromNormalizedPos();
+                RepositionPanel();
+            }
         }
 
         void PositionButton()
@@ -595,9 +604,9 @@ namespace SolarExpanseLaunchWindows.UI
             if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
                     _canvasRT, new Vector2(corners[1].x, corners[1].y), cam, out topLeft)) return;
             _rt.anchoredPosition = new Vector2(topLeft.x - 4f - _rt.sizeDelta.x, topLeft.y);
-            ClampButton();
-            _positioned = true;
-            if (PanelGO != null && PanelGO.activeSelf) PlacePanelUnderButton();
+            Clamp();
+            StoreNormalizedPos();
+            RepositionPanel();
         }
 
         RectTransform FindReferenceButton()
@@ -619,12 +628,30 @@ namespace SolarExpanseLaunchWindows.UI
         internal void PlacePanelUnderButton()
         {
             if (PanelRT == null || _rt == null) return;
-            Vector2 p = new Vector2(_rt.anchoredPosition.x, _rt.anchoredPosition.y - _rt.sizeDelta.y - 4f);
-            ClampPanel(ref p);
-            PanelRT.anchoredPosition = p;
+            RepositionPanel();
         }
 
-        void ClampButton()
+        void StoreNormalizedPos()
+        {
+            if (_canvasRT == null) return;
+            Rect cr = _canvasRT.rect;
+            if (cr.xMax <= 0f || cr.yMax <= 0f) return;
+            _normalizedPos = new Vector2(_rt.anchoredPosition.x / cr.xMax, _rt.anchoredPosition.y / cr.yMax);
+            _normalizedPosSet = true;
+        }
+
+        void RestoreFromNormalizedPos()
+        {
+            if (_canvasRT == null) return;
+            if (_normalizedPosSet)
+            {
+                Rect cr = _canvasRT.rect;
+                _rt.anchoredPosition = new Vector2(_normalizedPos.x * cr.xMax, _normalizedPos.y * cr.yMax);
+            }
+            Clamp();
+        }
+
+        void Clamp()
         {
             if (_canvasRT == null || _rt == null) return;
             Rect cr = _canvasRT.rect; Vector2 s = _rt.sizeDelta, p = _rt.anchoredPosition;
@@ -633,12 +660,17 @@ namespace SolarExpanseLaunchWindows.UI
             _rt.anchoredPosition = p;
         }
 
-        void ClampPanel(ref Vector2 p)
+        void RepositionPanel()
         {
-            if (_canvasRT == null || PanelRT == null) return;
-            Rect cr = _canvasRT.rect; Vector2 s = PanelRT.sizeDelta;
-            p.x = Mathf.Clamp(p.x, cr.xMin, cr.xMax - s.x);
-            p.y = Mathf.Clamp(p.y, cr.yMin + s.y, cr.yMax);
+            if (PanelRT == null || PanelGO == null || !PanelGO.activeSelf) return;
+            Vector2 p = new Vector2(_rt.anchoredPosition.x, _rt.anchoredPosition.y - _rt.sizeDelta.y - 4f);
+            if (_canvasRT != null)
+            {
+                Rect cr = _canvasRT.rect; Vector2 s = PanelRT.sizeDelta;
+                p.x = Mathf.Clamp(p.x, cr.xMin, cr.xMax - s.x);
+                p.y = Mathf.Clamp(p.y, cr.yMin + s.y, cr.yMax);
+            }
+            PanelRT.anchoredPosition = p;
         }
 
         public void OnPointerEnter(PointerEventData e) { if (Bg) Bg.color = NormalColor * 1.3f; }
@@ -646,31 +678,36 @@ namespace SolarExpanseLaunchWindows.UI
 
         public void OnPointerDown(PointerEventData e)
         {
-            _wasDrag       = false;
-            _clickPressPos = e.position;
+            _pressScreenPos = e.position;
         }
 
         public void OnPointerUp(PointerEventData e)
         {
             if (Bg) Bg.color = NormalColor;
-            if (_wasDrag) return;
+            if (Vector2.Distance(e.position, _pressScreenPos) >= EventSystem.current.pixelDragThreshold) return;
             bool wasOpen = PanelGO != null && PanelGO.activeSelf;
-            if (!wasOpen) { PanelGO?.SetActive(true); PlacePanelUnderButton(); Panel?.ForceRefresh(); }
+            if (!wasOpen) { PanelGO?.SetActive(true); RepositionPanel(); Panel?.ForceRefresh(); }
             else          { Panel?.ClosePanel(); }
         }
 
         public void OnBeginDrag(PointerEventData e)
         {
-            _wasDrag      = true;
             _dragStartPos = _rt.anchoredPosition;
         }
 
         public void OnDrag(PointerEventData e)
         {
             float scale = _canvas != null ? _canvas.scaleFactor : 1f;
-            _rt.anchoredPosition = _dragStartPos + (e.position - _clickPressPos) / scale;
-            ClampButton();
-            if (PanelGO != null && PanelGO.activeSelf) PlacePanelUnderButton();
+            _rt.anchoredPosition = _dragStartPos + (e.position - _pressScreenPos) / scale;
+            Clamp();
+            RepositionPanel();
+        }
+
+        public void OnEndDrag(PointerEventData e)
+        {
+            Clamp();
+            StoreNormalizedPos();
+            RepositionPanel();
         }
     }
 }
