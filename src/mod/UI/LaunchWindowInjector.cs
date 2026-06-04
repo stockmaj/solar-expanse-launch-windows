@@ -595,7 +595,7 @@ namespace SolarExpanseLaunchWindows.UI
 
         void PositionButton()
         {
-            var refRT = FindReferenceButton();
+            var refRT = FindReferenceButton() ?? ShowBtnRT;
             if (refRT == null || _rt == null || _canvasRT == null || _canvas == null) return;
             Camera cam = _canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : _canvas.worldCamera;
             var corners = new Vector3[4];

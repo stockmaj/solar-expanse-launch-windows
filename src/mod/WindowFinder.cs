@@ -59,9 +59,6 @@ namespace SolarExpanseLaunchWindows
             double depStep  = depSpan / DepIntervals;
             double arrStep  = (arrEnd - arrStart) / ArrIntervals;
 
-            double yr = ge.timeScale > 0 ? ge.timeScale : 1.0;
-            Plugin.Log.LogInfo($"[WF] {originId}→{destId}: T_from={tOribit/yr:F2}yr T_to={tDorbit/yr:F2}yr T_syn={tSynodic/yr:F2}yr num3={num3/yr:F2}yr num5={num5/yr:F2}yr depSpan={depSpan/yr:F2}yr tofMin={tofMin/yr:F2}yr tofMax={tofMax/yr:F2}yr");
-
             // Pre-compute arrival states on the fixed arrival grid (game's inner pre-computation).
             var arrStates = new BodyState[ArrIntervals + 1];
             for (int k = 0; k <= ArrIntervals; k++)
@@ -130,11 +127,6 @@ namespace SolarExpanseLaunchWindows
             LaunchWindow? fastest = earliestArr < double.MaxValue
                 ? new LaunchWindow(fastDep, fastArr, fastDv * dvToKmS)
                 : (LaunchWindow?)null;
-
-            if (optimal.HasValue)
-                Plugin.Log.LogInfo($"[WF]   optimal: dep+{(bestDepOpt-physNow)/yr:F2}yr arr+{(bestArrOpt-physNow)/yr:F2}yr tof={(bestArrOpt-bestDepOpt)/yr:F2}yr dv={optimal.Value.DeltaVKmS:F1}km/s");
-            if (fastest.HasValue)
-                Plugin.Log.LogInfo($"[WF]   fastest: dep+{(fastDep-physNow)/yr:F2}yr arr+{(fastArr-physNow)/yr:F2}yr tof={(fastArr-fastDep)/yr:F2}yr dv={fastest.Value.DeltaVKmS:F1}km/s");
 
             return (optimal, fastest, tSynodic);
         }

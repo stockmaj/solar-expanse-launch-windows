@@ -568,10 +568,8 @@ namespace SolarExpanseLaunchWindows
                 var result = new HashSet<string>();
 
                 System.Reflection.MethodInfo getOidM = null;
-                int scanned = 0, withFac = 0, withNb = 0;
                 foreach (var objectInfo in allInfos)
                 {
-                    scanned++;
                     if (getOidM == null)
                         getOidM = objectInfo.GetType().GetMethods(bf)
                             .FirstOrDefault(m => m.Name == "GetObjectInfoData" && m.GetParameters().Length == 1);
@@ -589,7 +587,6 @@ namespace SolarExpanseLaunchWindows
                         if (qty != null && Convert.ToInt64(qty) > 0) { hasBuilt = true; break; }
                     }
                     if (!hasBuilt) continue;
-                    withFac++;
                     // ObjectInfo.nBody (line 97 of ObjectInfo.cs) is the authoritative link to the NBody
                     // whose GetInstanceID().ToString() is the ephemeris key.
                     var nb = objectInfo.GetType().GetField("nBody", bf)?.GetValue(objectInfo) as NBody;
@@ -597,12 +594,9 @@ namespace SolarExpanseLaunchWindows
                     // Skip spacecraft (probes) — only celestial bodies count as bases.
                     var nbInfo = nb.GetObjectInfo();
                     if (nbInfo != null && nbInfo.objectTypes == EObjectTypes.Spacecraft) continue;
-                    withNb++;
                     string id = nb.GetInstanceID().ToString();
-                    Plugin.Log.LogInfo($"[LW] presence body: nb='{nb.name}' id={id} facilities={facList.Count}");
                     result.Add(id);
                 }
-                Plugin.Log.LogInfo($"[LW] GetPresenceBodyEphemIds: scanned={scanned} withFac={withFac} withNb={withNb} found={result.Count}");
                 return result;
             }
             catch (Exception ex)
