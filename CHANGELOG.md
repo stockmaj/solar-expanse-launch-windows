@@ -5,6 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-06-06
+### Added
+- From dropdown is now a typeahead: opens with a filter box, list sorted alphabetically.
+
+### Changed
+- Lambert calculations now run in parallel across destinations; typical load time 4–5× faster on multi-core machines.
+- Notification history panel now renders on top of the Launch Windows panel when both are open.
+
+### Fixed
+- Launch Windows button no longer snaps to the bottom-left corner when no other mod buttons are present; falls back to the notification history button as its anchor.
+- Search box no longer drops the first character or lags behind fast typing (results now update once per frame rather than on every keystroke).
+- Calculating overlay is now correctly hidden on all early-return paths in DoRefresh.
+
 ## [1.0.0] - 2026-06-03
 ### Added
 - Initial release.

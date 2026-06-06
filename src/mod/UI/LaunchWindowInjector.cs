@@ -210,7 +210,24 @@ namespace SolarExpanseLaunchWindows.UI
                 panelGO.SetActive(false);
 
                 // ── Origin dropdown overlay ───────────────────────────────────────────────────
-                var originDropGO = MakeDropdownPanel("LWOriginDropdown", canvas.transform, font, 220f, 200f);
+                var originDropGO = MakeDropdownPanel("LWOriginDropdown", canvas.transform, font, 220f, 230f);
+
+                // Shift viewport down 26px to leave room for the typeahead filter input.
+                var originVpRT = originDropGO.transform.Find("Viewport")?.GetComponent<RectTransform>();
+                if (originVpRT != null)
+                {
+                    originVpRT.offsetMin = new Vector2(3f, 2f);
+                    originVpRT.offsetMax = new Vector2(-3f, -26f);
+                }
+
+                var originFilterField = MakeInputField("OriginFilter", originDropGO.transform, font, "Filter…", 22f);
+                var originFilterRT    = originFilterField.GetComponent<RectTransform>();
+                originFilterRT.anchorMin         = new Vector2(0f, 1f);
+                originFilterRT.anchorMax         = new Vector2(1f, 1f);
+                originFilterRT.pivot             = new Vector2(0.5f, 1f);
+                originFilterRT.sizeDelta         = new Vector2(-6f, 22f);
+                originFilterRT.anchoredPosition  = new Vector2(0f, -2f);
+
                 originDropGO.SetActive(false);
 
                 // ── Craft dropdown overlay ────────────────────────────────────────────────────
@@ -229,7 +246,8 @@ namespace SolarExpanseLaunchWindows.UI
                 panel.ContentParent = contentGO.transform;
                 panel.FontAsset     = font;
                 panel.PanelRT       = panelRT;
-                panel.OriginDropGO  = originDropGO;
+                panel.OriginDropGO     = originDropGO;
+                panel.OriginFilterInput = originFilterField;
                 panel.CraftDropGO   = craftDropGO;
                 panel.SearchDropGO  = searchDropGO;
                 panel.SearchInput   = searchInput;

@@ -30,6 +30,7 @@ namespace SolarExpanseLaunchWindows
         internal GameObject      SearchDropGO;
         internal TMP_InputField  SearchInput;
         internal GameObject      CalcOverlayGO;
+        internal TMP_InputField  OriginFilterInput;
 
         // Data
         private GameBodyEphemeris ephem;
@@ -80,6 +81,8 @@ namespace SolarExpanseLaunchWindows
 
         void Start()
         {
+            if (OriginFilterInput != null)
+                OriginFilterInput.onValueChanged.AddListener(filter => PopulateOriginDropdown(filter?.Trim() ?? ""));
             if (SearchInput != null)
                 SearchInput.onValueChanged.AddListener(OnSearchChanged);
         }
@@ -128,15 +131,18 @@ namespace SolarExpanseLaunchWindows
         private void ShowOriginDropdown()
         {
             if (OriginDropGO == null) return;
-            PopulateOriginDropdown();
+            if (OriginFilterInput != null) OriginFilterInput.SetTextWithoutNotify("");
+            PopulateOriginDropdown("");
             PositionDropdownBelow(OriginDropGO, OriginBtn?.GetComponent<RectTransform>(), below: true);
             OriginDropGO.SetActive(true);
             originDropOpen = true;
+            if (OriginFilterInput != null) OriginFilterInput.ActivateInputField();
         }
 
         internal void HideOriginDropdown()
         {
             if (OriginDropGO != null) OriginDropGO.SetActive(false);
+            if (OriginFilterInput != null) OriginFilterInput.SetTextWithoutNotify("");
             originDropOpen = false;
         }
 
@@ -196,20 +202,23 @@ namespace SolarExpanseLaunchWindows
             if (SearchDropGO != null) SearchDropGO.SetActive(false);
         }
 
-        private void PopulateOriginDropdown()
+        private void PopulateOriginDropdown(string filter = "")
         {
             var content = GetDropContent(OriginDropGO);
-            if (content == null) return;
+            if (content == null || ephem == null) return;
 
             for (int i = content.childCount - 1; i >= 0; i--)
                 Destroy(content.GetChild(i).gameObject);
 
-            if (ephem == null) return;
+            var items = originIds
+                .Select(id => (id, label: ephem.GetDisplayName(id)))
+                .Where(x => string.IsNullOrEmpty(filter) ||
+                            x.label.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
+                .OrderBy(x => x.label, StringComparer.OrdinalIgnoreCase);
 
-            foreach (var id in originIds)
+            foreach (var (id, label) in items)
             {
                 var captured = id;
-                string label = ephem.GetDisplayName(id);
                 bool isCurrent = id == OriginId;
                 AddDropdownItem(content, label, isCurrent, () => {
                     int idx = originIds.IndexOf(captured);
