@@ -4,6 +4,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using Data;
 using Manager;
 using TMPro;
@@ -72,6 +73,9 @@ namespace SolarExpanseLaunchWindows
         private volatile bool _calcDone;
         private Dictionary<string, (LaunchWindow?, LaunchWindow?, LaunchWindow?, LaunchWindow?)> _pendingCache;
 
+        private string _pendingSearch;
+        private string _lastSearch;
+
         private string OriginId => originIds.Count > 0 ? originIds[originIndex % originIds.Count] : null;
 
         void Start()
@@ -93,6 +97,11 @@ namespace SolarExpanseLaunchWindows
             }
             if (!refreshing && needsRefresh)
                 DoRefresh();
+            if (_pendingSearch != null && _pendingSearch != _lastSearch)
+            {
+                _lastSearch = _pendingSearch;
+                ApplySearch(_pendingSearch);
+            }
         }
 
         internal void ForceRefresh()
@@ -215,11 +224,12 @@ namespace SolarExpanseLaunchWindows
 
         // ── Search / add destination ──────────────────────────────────────────────
 
-        private void OnSearchChanged(string query)
+        // Thin setter — actual rebuild happens in UpdateTick once per frame to avoid per-keystroke lag.
+        private void OnSearchChanged(string query) => _pendingSearch = query?.Trim() ?? "";
+
+        private void ApplySearch(string query)
         {
-            query = query?.Trim() ?? "";
             if (query.Length == 0) { HideSearchDropdown(); return; }
-            TryBuildEphem();
             if (ephem == null || SearchDropGO == null) { HideSearchDropdown(); return; }
 
             var content = GetDropContent(SearchDropGO);
@@ -249,7 +259,10 @@ namespace SolarExpanseLaunchWindows
                         destIds.Add(captured);
                         needsRefresh = true;
                     }
-                    if (SearchInput != null) SearchInput.text = "";
+                    // SetTextWithoutNotify avoids firing onValueChanged (which would lose focus).
+                    if (SearchInput != null) { SearchInput.SetTextWithoutNotify(""); SearchInput.ActivateInputField(); }
+                    _pendingSearch = "";
+                    _lastSearch    = "";
                     HideSearchDropdown();
                 });
             }
@@ -537,6 +550,7 @@ namespace SolarExpanseLaunchWindows
             var presenceIds = GetPresenceBodyEphemIds();
             if (presenceIds.Count == 0)
             {
+                Plugin.Log.LogWarning("[LW] AddPresenceBodies: GetPresenceBodyEphemIds returned 0 — reflection target may have changed in this build");
                 if (StatusTMP != null) StatusTMP.text = "No bases found";
                 return;
             }
@@ -626,41 +640,54 @@ namespace SolarExpanseLaunchWindows
             if (CalcOverlayGO != null) CalcOverlayGO.SetActive(true);
 
             var ge = GravityEngine.Instance();
-            if (ge == null) { refreshing = false; return; }
-            double physNow = ge.GetPhysicalTimeDouble();
-            double dvCap   = _craftDvCapGameUnits;
-            var destSnap   = new System.Collections.Generic.List<string>(destIds);
-            var originId   = OriginId;
-            var finderRef  = finder;
+            if (ge == null) { refreshing = false; if (CalcOverlayGO != null) CalcOverlayGO.SetActive(false); return; }
+            double physNow    = ge.GetPhysicalTimeDouble();
+            double dvCap      = _craftDvCapGameUnits;
+            var destSnap      = new System.Collections.Generic.List<string>(destIds);
+            var originId      = OriginId;
+            var ephemSnap     = ephem;
+            var dvToKmSSnap   = dvToKmS;
 
-            // Snapshot propagators on main thread so background thread can call GetState safely.
+            // Snapshot propagators on main thread so background threads can call GetState safely.
             ephem.SnapshotPropagators();
 
-            _calcDone    = false;
+            _calcDone     = false;
             _pendingCache = null;
             var t = new System.Threading.Thread(() =>
             {
-                var results = new Dictionary<string, (LaunchWindow?, LaunchWindow?, LaunchWindow?, LaunchWindow?)>();
-                foreach (var dId in destSnap)
-                {
-                    if (dId == originId) continue;
-                    try
+                var results     = new Dictionary<string, (LaunchWindow?, LaunchWindow?, LaunchWindow?, LaunchWindow?)>();
+                var resultsLock = new object();
+
+                // Each parallel worker gets its own WindowFinder/GameLambertSolver so there is no
+                // shared mutable state between threads.
+                Parallel.ForEach<string, WindowFinder>(
+                    destSnap.Where(dId => dId != originId),
+                    () => new WindowFinder(new GameLambertSolver(), ephemSnap, dvToKmSSnap),
+                    (dId, _, localFinder) =>
                     {
-                        var (opt1, fst1, syn) = finderRef.FindWindows(originId, dId, physNow, dvCap);
-                        LaunchWindow? opt2 = null, fst2 = null;
-                        if (syn > 0)
+                        (LaunchWindow? opt1, LaunchWindow? fst1, LaunchWindow? opt2, LaunchWindow? fst2) entry;
+                        try
                         {
-                            var (o2, f2, _) = finderRef.FindWindows(originId, dId, physNow + syn, dvCap);
-                            opt2 = o2; fst2 = f2;
+                            var (o1, f1, syn) = localFinder.FindWindows(originId, dId, physNow, dvCap);
+                            LaunchWindow? o2 = null, f2 = null;
+                            if (syn > 0)
+                            {
+                                var (oo2, ff2, _) = localFinder.FindWindows(originId, dId, physNow + syn, dvCap);
+                                o2 = oo2; f2 = ff2;
+                            }
+                            entry = (o1, f1, o2, f2);
                         }
-                        results[dId] = (opt1, fst1, opt2, fst2);
-                    }
-                    catch (Exception ex)
-                    {
-                        Plugin.Log.LogError($"[LW] FindWindows {dId}: {ex.Message}");
-                        results[dId] = (null, null, null, null);
-                    }
-                }
+                        catch (Exception ex)
+                        {
+                            Plugin.Log.LogError($"[LW] FindWindows {dId}: {ex.Message}");
+                            entry = (null, null, null, null);
+                        }
+                        lock (resultsLock) { results[dId] = entry; }
+                        return localFinder;
+                    },
+                    _ => { }
+                );
+
                 _pendingCache = results;
                 _calcDone = true;   // volatile write: flush _pendingCache before signalling
             });

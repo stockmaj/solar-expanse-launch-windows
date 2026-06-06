@@ -22,9 +22,6 @@ namespace SolarExpanseLaunchWindows
         public (LaunchWindow? optimal, LaunchWindow? fastest, double synodicPeriod) FindWindows(
             string originId, string destId, double physNow, double dvCap = double.MaxValue)
         {
-            var ge = GravityEngine.Instance();
-            if (ge == null) return (null, null, 0);
-
             double mu = ephem.SunMu;
             if (mu <= 0) return (null, null, 0);
 
@@ -76,9 +73,8 @@ namespace SolarExpanseLaunchWindows
 
             for (int j = 0; j <= DepIntervals; j++)
             {
-                double tDep    = depStart + j * depStep;
-                double depLerp = (double)j / DepIntervals;
-                var fromState  = ephem.GetState(originId, tDep);
+                double tDep   = depStart + j * depStep;
+                var fromState = ephem.GetState(originId, tDep);
                 bool fastDone  = false;
 
                 for (int k = 0; k <= ArrIntervals; k++)

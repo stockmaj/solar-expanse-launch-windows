@@ -37,7 +37,8 @@ namespace SolarExpanseLaunchWindows.UI
                 // ── Panel: clone notificationHistory for background style ──────────────────────
                 GameObject panelGO = UnityEngine.Object.Instantiate(historyGO, canvas.transform);
                 panelGO.name = "modLaunchWindowsPanel";
-                panelGO.transform.SetAsLastSibling();
+                // Insert just below the notification history so notifications always render on top.
+                panelGO.transform.SetSiblingIndex(historyGO.transform.GetSiblingIndex());
 
                 for (int i = panelGO.transform.childCount - 1; i >= 0; i--)
                     UnityEngine.Object.Destroy(panelGO.transform.GetChild(i).gameObject);
