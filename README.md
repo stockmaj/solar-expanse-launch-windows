@@ -16,7 +16,12 @@ dimmed second row with the next synodic-period window for longer-term planning.
 **From / Craft dropdowns** — change origin body or filter by a spacecraft in your
 fleet. Destinations outside the selected craft's Δv budget are shown in red.
 
-**My Bases** — auto-adds every body where you have a built facility.
+**Presets** — dropdown that adds a group of destinations in one click: *My Bases*
+(every body where you have a built facility) plus the game's own celestial body
+groups — Near-Earth Objects, Inner Belt, Middle Belt, Outer Belt, Jupiter
+Trojans, Kuiper Belt, and so on — exactly as the game classifies them.
+
+**Clear** — header button that removes all destinations at once.
 
 **Search** — type any body name to add it to the table.
 
