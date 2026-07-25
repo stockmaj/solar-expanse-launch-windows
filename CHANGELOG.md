@@ -3,7 +3,7 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [1.3.0] - 2026-07-25
 ### Added
 - **Presets dropdown** replaces the My Bases button. Contains My Bases plus one entry per in-game celestial body group (`ObjectInfoGroups`): Near-Earth Objects, Inner Belt, Middle Belt, Outer Belt, Jupiter Trojans, Kuiper Belt, etc. — the same classification the game's search window uses, listed sunward-out. Clicking a preset adds every group member known to the ephemeris.
 - **Clear** button in the panel header removes all destinations at once.
