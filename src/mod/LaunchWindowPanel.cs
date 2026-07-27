@@ -89,6 +89,7 @@ namespace SolarExpanseLaunchWindows
         private double _craftDryMass   = 0.0;
         private double _craftFuel      = 0.0;
         private double _craftThrustN   = 0.0;
+        private int    _thrustChecked, _thrustFlagged; // per-refresh diagnostic counters
         private bool   _craftConstAccel;
         private double _thrustMultiplier = 1.0; // Economic.DeltaVMultiplayerCheckingThrust
 
@@ -335,12 +336,7 @@ namespace SolarExpanseLaunchWindows
                     _sidecarDirty = true;
                     SetCraft(capName, capMaxDv, capCargo, capExhV, capDry, capFuel, capSolar, capThrust, capCA);
                     HideCraftDropdown();
-                    ClearAllRowData();
-                    _cacheByOrigin.Clear();
-                    _retCacheByOrigin.Clear();
-                    _needsOpt2ByOrigin.Clear();
-                    _needsFstByOrigin.Clear();
-                    needsRefresh = true;
+                    OnCraftChanged();
                 }, icon);
             }
 
@@ -942,8 +938,9 @@ namespace SolarExpanseLaunchWindows
                     var mult = econ?.GetType().GetProperty("DeltaVMultiplayerCheckingThrust", bfE)?.GetValue(econ)
                             ?? econ?.GetType().GetField("deltaVMultiplayerCheckingThrust", bfE)?.GetValue(econ);
                     if (mult != null) _thrustMultiplier = Convert.ToDouble(mult);
+                    else Plugin.Log.LogWarning("[LW] Economic.DeltaVMultiplayerCheckingThrust not found — thrust check will use 1.0");
                 }
-                catch { }
+                catch (Exception ex) { Plugin.Log.LogWarning($"[LW] thrust multiplier: {ex.Message}"); }
 
                 if (originIds.Count == 0)
                 {
@@ -1112,7 +1109,7 @@ namespace SolarExpanseLaunchWindows
         {
             _craftThrustN    = thrustN;
             _craftConstAccel = constAccel;
-            Plugin.Log.LogInfo($"[LW] SetCraft '{name}': exhaustV={exhaustV:F3} mass={dryMass:F1} fuel={fuel:F1} maxDv={maxDvKmS:F3}km/s solarRange={solarRangeAU:F2}AU");
+            Plugin.Log.LogInfo($"[LW] SetCraft '{name}': exhaustV={exhaustV:F3} mass={dryMass:F1} fuel={fuel:F1} maxDv={maxDvKmS:F3}km/s solarRange={solarRangeAU:F2}AU thrust={thrustN:F1}N constAccel={constAccel} thrustMult={_thrustMultiplier:F2}");
             _selectedCraftName   = name;
             _craftMaxDvKmS       = maxDvKmS;
             _craftSolarRangeAU   = solarRangeAU;
@@ -1301,7 +1298,11 @@ namespace SolarExpanseLaunchWindows
                     if (!_craftLogged)
                     {
                         if (isSolar) Plugin.Log.LogInfo($"[LW] craft '{scName}': solar sail, range={solarRangeAU:F2}AU maxCargo={maxCargo:F1}");
-                        else         Plugin.Log.LogInfo($"[LW] craft '{scName}': exhaustV={exhaustV:F3} mass={emptyMass:F1} fuel={fuel:F1} maxCargo={maxCargo:F1} maxDv={maxDvKmS:F1}km/s");
+                        else         Plugin.Log.LogInfo($"[LW] craft '{scName}': exhaustV={exhaustV:F3} mass={emptyMass:F1} fuel={fuel:F1} maxCargo={maxCargo:F1} maxDv={maxDvKmS:F1}km/s thrust={thrustN:F1}N constAccel={constAccel}");
+                        // A zero thrust reading silently disables the feasibility check —
+                        // say so rather than quietly showing every window as flyable.
+                        if (!isSolar && thrustN <= 0)
+                            Plugin.Log.LogWarning($"[LW] craft '{scName}': GetThrust returned 0 — thrust feasibility check disabled for this craft");
                     }
                     result.Add((scName, maxDvKmS, maxCargo, exhaustV, emptyMass, fuel, solarRangeAU, thrustN, constAccel, scIcon));
                     }
@@ -1468,7 +1469,144 @@ namespace SolarExpanseLaunchWindows
             }
         }
 
+        // Presence dot states, in precedence order:
+        //   ● green  — facilities built here
+        //   ● yellow — a pending mission departs from or arrives here
+        //   ○ grey   — neither
+        // The filled glyph (U+25CF) draws a visibly smaller disc than the hollow one
+        // (U+25CB) at equal point size, so it's scaled up to match optically.
+        // Midline alignment centres on the glyph's ink bounds rather than the font's
+        // line metrics, which is what keeps the two glyphs on the same optical centre —
+        // with Center, the filled disc rides low because its ink sits differently on
+        // the baseline.
+        private static readonly Color DotGreen  = new Color(0.30f, 0.80f, 0.38f);
+        private static readonly Color DotYellow = new Color(0.92f, 0.78f, 0.22f);
+        private static readonly Color DotGrey   = new Color(0.45f, 0.45f, 0.45f, 0.9f);
+
+        private static void SetPresenceDot(TextMeshProUGUI tmp, bool hasPresence, bool hasMission)
+        {
+            if (tmp == null) return;
+            bool filled = hasPresence || hasMission;
+            tmp.text      = filled ? "●" : "○";
+            tmp.fontSize  = filled ? 18f : 13f;
+            tmp.color     = hasPresence ? DotGreen : (hasMission ? DotYellow : DotGrey);
+            tmp.alignment = TextAlignmentOptions.Midline;
+        }
+
+        // Bodies that are the origin or destination of a pending player mission —
+        // scheduled (not yet launched) or ongoing (in flight). Matches the game's
+        // MissionsWindow categories: not cancelled, not landed, arrival still ahead.
+        // Moons/orbit bodies roll up to their parent planet, as with presence.
+        private HashSet<string> GetMissionBodyEphemIds()
+        {
+            var result = new HashSet<string>();
+            try
+            {
+                if (ephem == null) return result;
+                var mim = MonoBehaviourSingleton<Manager.MissionInfoManager>.Instance;
+                var tc  = MonoBehaviourSingleton<TimeController>.Instance;
+                if (mim == null || tc == null) return result;
+                var player = MonoBehaviourSingleton<GameManager>.Instance?.Player;
+                DateTime now = tc.CurrentTime;
+
+                foreach (var mi in mim.ListMissionInfo)
+                {
+                    if (mi == null || mi.cancel || mi.wasLand) continue;
+                    if (player != null && (mi.company == null || !mi.company.Equals(player))) continue;
+                    if (now >= mi.DateArrive) continue; // already finished
+                    AddResolvedBody(result, mi.start);
+                    AddResolvedBody(result, mi.target);
+                }
+            }
+            catch (Exception ex) { Plugin.Log.LogWarning($"[LW] GetMissionBodyEphemIds: {ex.Message}"); }
+            return result;
+        }
+
+        // Map an ObjectInfo to an ephemeris body id, walking up to the parent planet
+        // when the body itself isn't heliocentric (moons, orbital stations).
+        private void AddResolvedBody(HashSet<string> into, Game.Info.ObjectInfo oi)
+        {
+            try
+            {
+                for (var cur = oi; cur != null; cur = cur.ParentObjectInfo)
+                {
+                    var nb = cur.NBody;
+                    if (nb == null) continue;
+                    string id = nb.GetInstanceID().ToString();
+                    if (ephem.AllBodyIds.Contains(id)) { into.Add(id); return; }
+                }
+            }
+            catch { }
+        }
+
         // ── Refresh + row building ────────────────────────────────────────────────
+
+        // Switching craft used to wipe every cache and rescan the whole table. Almost
+        // nothing there actually depends on the craft:
+        //   • Optimal and Return windows come from a Lambert search that ignores the Δv
+        //     cap entirely, so they are craft-independent — keep them.
+        //   • Fuel and the thrust warning are computed at render time — free.
+        //   • Only Fastest is capped by the craft's Δv budget. Re-pick it from the
+        //     cached Pareto frontier; only entries with no frontier (loaded from a
+        //     sidecar, or computed before this existed) need a scan, and only when the
+        //     Fastest section is actually visible.
+        internal void OnCraftChanged()
+        {
+            double cap = CraftDvCapKmS;
+            int repicked = 0, rescan = 0;
+
+            foreach (var dId in cache.Keys.ToList())
+            {
+                var e = cache[dId];
+                bool haveF1 = _frontier1.TryGetValue(FKey(OriginId, dId), out var f1);
+                bool haveF2 = _frontier2.TryGetValue(FKey(OriginId, dId), out var f2);
+
+                if (haveF1) { e.fst1 = FastestFrontier.Select(f1, cap); repicked++; }
+                if (haveF2) e.fst2 = FastestFrontier.Select(f2, cap);
+                cache[dId] = e;
+
+                if (!haveF1 && e.opt1.HasValue && ShowFastest) { _needsFstRecalc.Add(dId); rescan++; }
+            }
+
+            // Other origins' cached Fastest values are now stale for this craft; drop
+            // just those, keeping their (craft-independent) Optimal windows.
+            foreach (var originKey in _cacheByOrigin.Keys.ToList())
+            {
+                var byDest = _cacheByOrigin[originKey];
+                foreach (var dId in byDest.Keys.ToList())
+                {
+                    var (o1, f1o, o2, f2o) = byDest[dId];
+                    var nf1 = _frontier1.TryGetValue(FKey(originKey, dId), out var ff1)
+                        ? FastestFrontier.Select(ff1, cap) : null;
+                    var nf2 = _frontier2.TryGetValue(FKey(originKey, dId), out var ff2)
+                        ? FastestFrontier.Select(ff2, cap) : null;
+                    byDest[dId] = (o1, nf1, o2, nf2);
+                    if (ff1 == null && o1.HasValue && ShowFastest)
+                    {
+                        if (!_needsFstByOrigin.TryGetValue(originKey, out var set))
+                            _needsFstByOrigin[originKey] = set = new HashSet<string>();
+                        set.Add(dId);
+                    }
+                }
+            }
+
+            Plugin.Log.LogInfo($"[LW] Craft change: {repicked} Fastest re-picked from frontier, {rescan} need rescan");
+            needsRefresh = true;
+        }
+
+        // Δv budget for Fastest selection. Solar sails get 0 — their continuous-thrust
+        // flight model makes an impulsive Fastest window meaningless (matches the
+        // dvCap=0 passed to the solver).
+        private double CraftDvCapKmS =>
+            _craftSolarRangeAU > 0 ? 0.0
+            : (_craftMaxDvKmS == double.MaxValue ? double.MaxValue : _craftMaxDvKmS);
+
+        // Pareto frontiers for the first and second window, keyed origin|dest so an
+        // origin switch needs no save/restore. Memory-only: not written to the sidecar.
+        private readonly Dictionary<string, List<FastestCandidate>> _frontier1 = new Dictionary<string, List<FastestCandidate>>();
+        private readonly Dictionary<string, List<FastestCandidate>> _frontier2 = new Dictionary<string, List<FastestCandidate>>();
+        private volatile Dictionary<string, (List<FastestCandidate> f1, List<FastestCandidate> f2)> _pendingFrontier;
+        private static string FKey(string originId, string destId) => (originId ?? "") + "|" + destId;
 
         private void ClearAllRowData()
         {
@@ -1476,6 +1614,8 @@ namespace SolarExpanseLaunchWindows
             retCache.Clear();
             _nullCalcAt.Clear();
             _ret2Tried.Clear();
+            _frontier1.Clear();
+            _frontier2.Clear();
             foreach (var tmps in rowTMPs.Values)
                 foreach (var tmp in tmps)
                     if (tmp != null) { tmp.text = "—"; tmp.color = DashColor; }
@@ -1569,6 +1709,7 @@ namespace SolarExpanseLaunchWindows
             var t = new System.Threading.Thread(() =>
             {
                 var results     = new Dictionary<string, (LaunchWindow?, LaunchWindow?, LaunchWindow?, LaunchWindow?)>();
+                var frontiers   = new Dictionary<string, (List<FastestCandidate> f1, List<FastestCandidate> f2)>();
                 var retResults  = new Dictionary<string, (LaunchWindow?, LaunchWindow?)>();
                 var resultsLock = new object();
 
@@ -1595,13 +1736,19 @@ namespace SolarExpanseLaunchWindows
                         (LaunchWindow? opt1, LaunchWindow? fst1, LaunchWindow? opt2, LaunchWindow? fst2) entry;
                         try
                         {
-                            var (o1, f1, syn) = localFinder.FindWindows(originId, dId, physNow, dvCap);
+                            // Capture the Δv/arrival frontiers so a later craft switch
+                            // can re-pick Fastest without rescanning.
+                            var fr1 = new List<FastestCandidate>();
+                            List<FastestCandidate> fr2 = null;
+                            var (o1, f1, syn) = localFinder.FindWindows(originId, dId, physNow, dvCap, fr1);
                             LaunchWindow? o2 = null, f2 = null;
                             if (syn > 0 && showNextSnap)
                             {
-                                var (oo2, ff2, _) = localFinder.FindWindows(originId, dId, physNow + syn, dvCap);
+                                fr2 = new List<FastestCandidate>();
+                                var (oo2, ff2, _) = localFinder.FindWindows(originId, dId, physNow + syn, dvCap, fr2);
                                 o2 = oo2; f2 = ff2;
                             }
+                            lock (resultsLock) { frontiers[dId] = (fr1, fr2); }
                             entry = (o1, f1, o2, f2);
                         }
                         catch (Exception ex)
@@ -1644,8 +1791,14 @@ namespace SolarExpanseLaunchWindows
                             double startTime  = syn > 0
                                 ? item.opt1.DepartureEpoch + syn - bufferPhys
                                 : item.opt1.DepartureEpoch;
-                            var (o2, f2, _) = localFinder.FindWindows(originId, item.dId, startTime, dvCap);
-                            lock (resultsLock) { results[item.dId] = (item.opt1, item.fst1, o2, f2); }
+                            var fr2p = new List<FastestCandidate>();
+                            var (o2, f2, _) = localFinder.FindWindows(originId, item.dId, startTime, dvCap, fr2p);
+                            lock (resultsLock)
+                            {
+                                results[item.dId] = (item.opt1, item.fst1, o2, f2);
+                                frontiers.TryGetValue(item.dId, out var prevF);
+                                frontiers[item.dId] = (prevF.f1, fr2p);
+                            }
                             if (showRetSnap && o2.HasValue)
                             {
                                 // Keep the cached ret1; only the new second window needs a return.
@@ -1674,14 +1827,18 @@ namespace SolarExpanseLaunchWindows
                         try
                         {
                             double syn = localFinder.GetSynodic(originId, item.dId);
-                            var r1 = localFinder.FindWindows(originId, item.dId, physNow, dvCap);
+                            var fr1f = new List<FastestCandidate>();
+                            List<FastestCandidate> fr2f = null;
+                            var r1 = localFinder.FindWindows(originId, item.dId, physNow, dvCap, fr1f);
                             LaunchWindow? f1 = r1.fastest;
                             LaunchWindow? f2 = null;
                             if (syn > 0 && showNextSnap)
                             {
-                                var r2 = localFinder.FindWindows(originId, item.dId, physNow + syn, dvCap);
+                                fr2f = new List<FastestCandidate>();
+                                var r2 = localFinder.FindWindows(originId, item.dId, physNow + syn, dvCap, fr2f);
                                 f2 = r2.fastest;
                             }
+                            lock (resultsLock) { frontiers[item.dId] = (fr1f, fr2f); }
                             lock (resultsLock) { results[item.dId] = (item.opt1, f1, item.opt2, f2); }
                         }
                         catch (Exception ex)
@@ -1717,6 +1874,7 @@ namespace SolarExpanseLaunchWindows
                 );
 
                 _pendingRetCache = retResults;
+                _pendingFrontier = frontiers;
                 _pendingCache = results;
                 _calcDone = true;   // volatile write: flush _pendingCache before signalling
             });
@@ -1751,6 +1909,16 @@ namespace SolarExpanseLaunchWindows
                             _ret2Tried.Remove(kv.Key);
                     }
                     _pendingRetCache = null;
+                }
+                if (_pendingFrontier != null)
+                {
+                    foreach (var kv in _pendingFrontier)
+                    {
+                        var fkey = FKey(OriginId, kv.Key);
+                        if (kv.Value.f1 != null) _frontier1[fkey] = kv.Value.f1;
+                        if (kv.Value.f2 != null) _frontier2[fkey] = kv.Value.f2;
+                    }
+                    _pendingFrontier = null;
                 }
                 _needsOpt2Recalc.Clear();
                 _needsFstRecalc.Clear();
@@ -1792,7 +1960,9 @@ namespace SolarExpanseLaunchWindows
             }
 
             double physNow = ge != null ? ge.GetPhysicalTimeDouble() : 0;
+            _thrustChecked = 0; _thrustFlagged = 0;
             var presence = DestIds.Count > 0 ? GetPresenceBodyEphemIds() : new HashSet<string>();
+            var missionBodies = DestIds.Count > 0 ? GetMissionBodyEphemIds() : new HashSet<string>();
 
             foreach (var dId in DestIds)
             {
@@ -1800,11 +1970,7 @@ namespace SolarExpanseLaunchWindows
                 var tmps = rowTMPs[dId];
 
                 if (rowPresenceTMPs.TryGetValue(dId, out var presTMP2))
-                {
-                    bool has = presence.Contains(dId);
-                    presTMP2.text  = has ? "●" : "○";
-                    presTMP2.color = has ? new Color(0.30f, 0.80f, 0.38f) : new Color(0.45f, 0.45f, 0.45f, 0.9f);
-                }
+                    SetPresenceDot(presTMP2, presence.Contains(dId), missionBodies.Contains(dId));
 
                 // Out-of-range indicator for solar sails.
                 bool outOfRange = false;
@@ -1827,6 +1993,11 @@ namespace SolarExpanseLaunchWindows
 
                 if (cache.TryGetValue(dId, out var entry))
                 {
+                    if (entry.opt1.HasValue)
+                    {
+                        _thrustChecked++;
+                        if (ThrustShort(entry.opt1.Value)) _thrustFlagged++;
+                    }
                     // [0]=opt1Dep [1]=opt1Dv [2]=opt1Tvl [3]=fst1Dep [4]=fst1Dv [5]=fst1Tvl
                     // [6]=opt2Dep [7]=opt2Dv [8]=opt2Tvl [9]=fst2Dep [10]=fst2Dv [11]=fst2Tvl
                     // [12]=opt1Fuel [13]=fst1Fuel [14]=opt2Fuel [15]=fst2Fuel
@@ -1843,6 +2014,10 @@ namespace SolarExpanseLaunchWindows
                     }
                 }
             }
+
+            if (_thrustChecked > 0)
+                Plugin.Log.LogInfo($"[LW] Thrust check: {_thrustFlagged}/{_thrustChecked} optimal windows short on thrust " +
+                                   $"(thrust={_craftThrustN:F1}N mass={_craftDryMass + _craftFuel:F1}t mult={_thrustMultiplier:F2})");
         }
 
         // Sub-column widths — must match injector sub-header widths exactly.
@@ -1928,17 +2103,16 @@ namespace SolarExpanseLaunchWindows
             var presImg = presGO.AddComponent<Image>();
             presImg.color = Color.clear; presImg.raycastTarget = true;
             presGO.AddComponent<UI.LWTooltipTrigger>().Text =
-                "Presence: ● green = you have facilities built on this body (probes excluded); ○ grey = none.";
+                "Presence: ● green = you have facilities built on this body (probes excluded); " +
+                "● yellow = a scheduled or in-flight mission departs from or arrives here; ○ grey = neither.";
             var presLblGO = new GameObject("L", typeof(RectTransform));
             presLblGO.transform.SetParent(presGO.transform, false);
             var presLblRT = presLblGO.GetComponent<RectTransform>();
             presLblRT.anchorMin = Vector2.zero; presLblRT.anchorMax = Vector2.one; presLblRT.sizeDelta = Vector2.zero;
             var presTMP = presLblGO.AddComponent<TextMeshProUGUI>();
             if (FontAsset != null) presTMP.font = FontAsset;
-            presTMP.text = "○"; presTMP.fontSize = 13f;
-            presTMP.alignment = TextAlignmentOptions.Center;
-            presTMP.color = new Color(0.45f, 0.45f, 0.45f, 0.9f);
             presTMP.enableWordWrapping = false; presTMP.raycastTarget = false;
+            SetPresenceDot(presTMP, hasPresence: false, hasMission: false);
             rowPresenceTMPs[dId] = presTMP;
 
             // Icon slot (12px)
@@ -2224,6 +2398,8 @@ namespace SolarExpanseLaunchWindows
             retCache.Remove(dId);
             _nullCalcAt.Remove(dId);
             _ret2Tried.Remove(dId);
+            foreach (var k in _frontier1.Keys.Where(k => k.EndsWith("|" + dId, StringComparison.Ordinal)).ToList())
+            { _frontier1.Remove(k); _frontier2.Remove(k); }
             rowTMPs.Remove(dId);
             rowNameTMPs.Remove(dId);
             rowIconImgs.Remove(dId);
