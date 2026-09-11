@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.3.2] - 2026-09-10
+### Fixed
+- Indicator button now matches the other tracker mods' styling in QoLarExpanse's shared "Modded Outliners" panel: font size reduced from 15pt to the shared 11pt convention, added a colored status dot bubble, and the button width now lines up with the other mods' entries instead of sitting oversized off to one side.
+- Font resolution for the indicator/header label now falls back to the notification prefab's own font (and logs the result) if the primary lookup fails, instead of silently leaving the label on TMP's default font.
+
 ## [1.3.1] - 2026-07-27
 ### Added
 - **Presence indicator**: dot now also shows ● yellow when a scheduled or in-flight mission departs from or arrives at the body (green still takes precedence over yellow, yellow over grey).

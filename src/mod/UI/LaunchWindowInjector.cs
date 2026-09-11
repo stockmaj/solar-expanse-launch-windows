@@ -20,6 +20,33 @@ namespace SolarExpanseLaunchWindows.UI
             typeof(NotificationManager).GetField("notificationHistory",
                 BindingFlags.Instance | BindingFlags.NonPublic);
 
+        // Mirrors LifeSupportTracker/PowerTracker's FindFontAsset: the primary lookup can
+        // silently return null if historyGO's child order shifts (e.g. after a game UI
+        // update), which previously left `font` null and fell back to TMP's default
+        // font/size — the mismatched look reported against the other trackers. Falling
+        // back to the notification prefab's own text component, and logging either way,
+        // makes a font-resolution failure visible instead of a silent style regression.
+        private static TMP_FontAsset FindFontAsset(NotificationManager nm, GameObject historyGO)
+        {
+            TextMeshProUGUI src = historyGO.GetComponentInChildren<TextMeshProUGUI>(includeInactive: true);
+            if (src?.font != null) { Plugin.Log.LogInfo($"[LW] font '{src.font.name}'"); return src.font; }
+            try
+            {
+                var prefabField = typeof(NotificationManager).GetField("notificationUIPrefab",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                var prefab = prefabField?.GetValue(nm);
+                if (prefab != null)
+                {
+                    var textField = prefab.GetType().GetField("text", BindingFlags.Instance | BindingFlags.NonPublic);
+                    src = textField?.GetValue(prefab) as TextMeshProUGUI;
+                    if (src?.font != null) { Plugin.Log.LogInfo($"[LW] font from prefab '{src.font.name}'"); return src.font; }
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning($"[LW] font fallback: {e.Message}"); }
+            Plugin.Log.LogWarning("[LW] No font found");
+            return null;
+        }
+
         internal static void Inject(NotificationManager nm)
         {
             try
@@ -33,7 +60,7 @@ namespace SolarExpanseLaunchWindows.UI
                 Canvas canvas = showBtn.GetComponentInParent<Canvas>();
                 if (canvas == null) { Plugin.Log.LogError("[LW] Canvas not found"); return; }
 
-                TMP_FontAsset font = historyGO.GetComponentInChildren<TextMeshProUGUI>(true)?.font;
+                TMP_FontAsset font = FindFontAsset(nm, historyGO);
                 // Prefer Oxanium (the game's heading font) for a cleaner look; fall back to Inter.
                 // For table value cells, prefer a true monospace font if the game ever ships one;
                 // otherwise Orbitron (near-uniform glyph widths, matches the game's HUD numerals).
@@ -361,7 +388,13 @@ namespace SolarExpanseLaunchWindows.UI
                 indicatorRT.anchorMin = new Vector2(0.5f, 0.5f);
                 indicatorRT.anchorMax = new Vector2(0.5f, 0.5f);
                 indicatorRT.pivot     = new Vector2(0f, 1f);
-                indicatorRT.sizeDelta = new Vector2(180f, 33f);
+                // Matches LifeSupportTracker/PowerTracker's 150x30 indicator box as closely as
+                // legible: QoLarExpanse's status dropdown left-aligns every mod's box at a shared X
+                // position, so a differently-sized box makes centered text land at a different
+                // horizontal offset than its siblings even though the boxes' left edges line up.
+                // "LAUNCH WINDOWS" is a longer string than its siblings, so this keeps a little
+                // extra width over the strict 150 convention to avoid ellipsis truncation.
+                indicatorRT.sizeDelta = new Vector2(160f, 30f);
                 indicatorRT.anchoredPosition = new Vector2(-9999f, -9999f);
 
                 var indicatorBg = indicatorGO.AddComponent<Image>();
@@ -371,7 +404,7 @@ namespace SolarExpanseLaunchWindows.UI
                 else indicatorBg.color = new Color(0.15f, 0.15f, 0.2f, 0.9f);
                 indicatorBg.raycastTarget = true;
 
-                MakeFillLabel(indicatorGO, font, "LAUNCH WINDOWS", 15f);
+                MakeFillLabel(indicatorGO, font, "<color=#B266FF>●</color>  LAUNCH WINDOWS", 11f);
 
                 var mover = indicatorGO.AddComponent<LWMover>();
                 mover.Bg          = indicatorBg;
